@@ -143,6 +143,7 @@ def test_built_release_pair_completes_the_provider_lifecycle(tmp_path: Path) -> 
     code = textwrap.dedent(
         f"""
         import json
+        import importlib
         import sys
         from pathlib import Path
         site = Path({str(site)!r}).resolve()
@@ -152,6 +153,11 @@ def test_built_release_pair_completes_the_provider_lifecycle(tmp_path: Path) -> 
         import mnemosyne_hermes
         for module in (mnemosyne, mnemosyne_hermes):
             assert Path(module.__file__).resolve().is_relative_to(site), module.__file__
+        required_core_api = {REQUIRED_CORE_API!r}
+        for module_name, symbol in required_core_api:
+            api_module = importlib.import_module(module_name)
+            assert Path(api_module.__file__).resolve().is_relative_to(site), api_module.__file__
+            assert hasattr(api_module, symbol), (module_name, symbol)
         from mnemosyne_hermes import MnemosyneMemoryProvider
 
         def call(provider, name, args):
