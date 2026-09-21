@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import ast
 import importlib
+import os
 import re
+import subprocess
+import sys
+import textwrap
+import zipfile
 from pathlib import Path
 
 try:
@@ -33,6 +38,7 @@ REQUIRED_CORE_API = (
 
 
 def _core_version() -> str:
+    """Return the core version declared by the source package."""
     tree = ast.parse(CORE_INIT.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -45,6 +51,7 @@ def _core_version() -> str:
 
 
 def _mnemosyne_memory_specs(project: Path) -> list[str]:
+    """Collect core dependency specifications from one project file."""
     data = tomllib.loads(project.read_text(encoding="utf-8"))
     specs = list(data["project"].get("dependencies", []))
     for values in data["project"].get("optional-dependencies", {}).values():
@@ -53,6 +60,7 @@ def _mnemosyne_memory_specs(project: Path) -> list[str]:
 
 
 def test_hermes_packages_require_the_current_core_api_release() -> None:
+    """Require every Hermes package surface to pin the current core API release."""
     core_version = _core_version()
     for project in HERMES_PROJECTS:
         specs = _mnemosyne_memory_specs(project)
@@ -71,6 +79,104 @@ def test_hermes_packages_require_the_current_core_api_release() -> None:
 
 
 def test_hermes_required_core_api_is_present() -> None:
+    """Require the source core to export every API imported by Hermes."""
     for module_name, symbol_name in REQUIRED_CORE_API:
         module = importlib.import_module(module_name)
         assert hasattr(module, symbol_name), (module_name, symbol_name)
+
+
+def _build_wheel(source: Path, wheel_dir: Path) -> Path:
+    """Build one project wheel and return its path."""
+    before = set(wheel_dir.glob("*.whl"))
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
+            str(wheel_dir),
+            ".",
+        ],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = set(wheel_dir.glob("*.whl")) - before
+    assert len(created) == 1, created
+    return created.pop()
+
+
+def _extract_wheel(wheel: Path, target: Path) -> None:
+    """Extract one wheel into an isolated import root."""
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(target)
+
+
+def test_built_release_pair_completes_the_provider_lifecycle(tmp_path: Path) -> None:
+    """Build the declared release pair and exercise its public lifecycle."""
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    core_wheel = _build_wheel(ROOT, wheel_dir)
+    hermes_wheel = _build_wheel(ROOT / "integrations" / "hermes", wheel_dir)
+    site = tmp_path / "site"
+    site.mkdir()
+    _extract_wheel(core_wheel, site)
+    _extract_wheel(hermes_wheel, site)
+    home = tmp_path / "hermes-home"
+    code = textwrap.dedent(
+        f"""
+        import json
+        import sys
+        sys.path.insert(0, {str(site)!r})
+        from mnemosyne_hermes import MnemosyneMemoryProvider
+
+        def call(provider, name, args):
+            return json.loads(provider.handle_tool_call(name, args))
+
+        provider = MnemosyneMemoryProvider()
+        provider.initialize(
+            "release-pair-primary",
+            agent_context="primary",
+            hermes_home={str(home)!r},
+            auto_sleep=False,
+        )
+        assert provider._beam is not None, provider._init_error
+        token = "release_contract_1014_unique_token"
+        assert call(provider, "mnemosyne_remember", {{"content": token}})["status"] == "stored"
+        recalled = call(provider, "mnemosyne_recall", {{"query": token, "limit": 5}})
+        assert any(token in row.get("content", "") for row in recalled["results"])
+        provider.initialize(
+            "release-pair-skip",
+            agent_context="subagent",
+            hermes_home={str(home)!r},
+            auto_sleep=False,
+        )
+        skipped = call(provider, "mnemosyne_stats", {{}})
+        assert skipped["status"] == "memory_unavailable"
+        assert skipped["reason_code"] == "reset_by_reinit"
+        provider.initialize(
+            "release-pair-recovery",
+            agent_context="primary",
+            hermes_home={str(home)!r},
+            auto_sleep=False,
+        )
+        assert provider._beam is not None, provider._init_error
+        assert call(provider, "mnemosyne_stats", {{}}).get("status") != "memory_unavailable"
+        provider.shutdown()
+        """
+    )
+    env = os.environ.copy()
+    env["MNEMOSYNE_NO_EMBEDDINGS"] = "1"
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
