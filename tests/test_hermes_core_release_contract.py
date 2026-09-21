@@ -3,8 +3,12 @@ from __future__ import annotations
 import ast
 import importlib
 import re
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:  # Python 3.10
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_INIT = ROOT / "mnemosyne" / "__init__.py"
