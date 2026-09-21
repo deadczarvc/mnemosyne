@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import os
 import re
 import subprocess
@@ -9,6 +10,9 @@ import sys
 import textwrap
 import zipfile
 from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 try:
     import tomllib
@@ -62,14 +66,21 @@ def _mnemosyne_memory_specs(project: Path) -> list[str]:
 def test_hermes_packages_require_the_current_core_api_release() -> None:
     """Require every Hermes package surface to pin the current core API release."""
     core_version = _core_version()
+    parsed_version = Version(core_version)
     for project in HERMES_PROJECTS:
         specs = _mnemosyne_memory_specs(project)
         assert specs, project
-        assert all(f">={core_version}" in spec for spec in specs), (
-            project,
-            core_version,
-            specs,
-        )
+        for spec in specs:
+            requirement = Requirement(spec)
+            assert parsed_version in requirement.specifier, (
+                project,
+                core_version,
+                spec,
+            )
+            assert any(
+                item.operator == ">=" and item.version == core_version
+                for item in requirement.specifier
+            ), (project, core_version, spec)
     assert f"mnemosyne-memory>={core_version}" in LEGACY_HERMES_MANIFEST.read_text(
         encoding="utf-8"
     )
@@ -126,11 +137,21 @@ def test_built_release_pair_completes_the_provider_lifecycle(tmp_path: Path) -> 
     _extract_wheel(core_wheel, site)
     _extract_wheel(hermes_wheel, site)
     home = tmp_path / "hermes-home"
+    yaml_spec = importlib.util.find_spec("yaml")
+    assert yaml_spec is not None and yaml_spec.origin is not None
+    dependency_site = Path(yaml_spec.origin).resolve().parents[1]
     code = textwrap.dedent(
         f"""
         import json
         import sys
-        sys.path.insert(0, {str(site)!r})
+        from pathlib import Path
+        site = Path({str(site)!r}).resolve()
+        sys.path.insert(0, str(site))
+        sys.path.insert(1, {str(dependency_site)!r})
+        import mnemosyne
+        import mnemosyne_hermes
+        for module in (mnemosyne, mnemosyne_hermes):
+            assert Path(module.__file__).resolve().is_relative_to(site), module.__file__
         from mnemosyne_hermes import MnemosyneMemoryProvider
 
         def call(provider, name, args):
@@ -172,7 +193,7 @@ def test_built_release_pair_completes_the_provider_lifecycle(tmp_path: Path) -> 
     env["MNEMOSYNE_NO_EMBEDDINGS"] = "1"
     env.pop("PYTHONPATH", None)
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-S", "-c", code],
         cwd=tmp_path,
         env=env,
         capture_output=True,
