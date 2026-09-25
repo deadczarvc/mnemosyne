@@ -351,7 +351,6 @@ class _CredentialedNoRedirect(urllib.request.HTTPRedirectHandler):
         )
 
 
-
 _EMBED_MAX_CHARS = int(os.environ.get("MNEMOSYNE_EMBEDDING_MAX_CHARS", "6000"))
 
 
@@ -365,6 +364,7 @@ def _cap_for_api(texts: List[str]) -> List[str]:
     if limit <= 0:
         return texts
     return [t[:limit] if len(t) > limit else t for t in texts]
+
 
 def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
     """Embed texts via OpenAI-compatible API (OpenRouter or custom endpoint)."""
