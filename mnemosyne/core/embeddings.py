@@ -3,6 +3,7 @@ Mnemosyne Dense Retrieval
 Supports local fastembed (ONNX) and OpenAI-compatible API embeddings.
 Falls back to keyword-only if neither is available.
 """
+
 from __future__ import annotations
 
 import json
@@ -40,10 +41,12 @@ try:
 except Exception:
     TextEmbedding = None
 
+
 def _is_fastembed_available() -> bool:
     """Check if fastembed is available. Evaluates lazily, so a correct
     sys.path ordering at call time won't be shadowed by an early import."""
     return np is not None and TextEmbedding is not None
+
 
 # Backward-compatible alias for legacy users who import this constant.
 # Use _is_fastembed_available() in new code — it re-evaluates on each call.
@@ -68,8 +71,12 @@ _FASTEMBED_CACHE_DIR = os.environ.get(
 # --- OpenAI-compatible API ---
 # Mnemosyne embedding config is independent of general OpenRouter/OpenAI settings.
 # Embedding models may use local llama.cpp, OpenAI, Anthropic, or any other provider.
-_OPENAI_API_KEY = os.environ.get("MNEMOSYNE_EMBEDDING_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
-_OPENAI_BASE_URL = os.environ.get("MNEMOSYNE_EMBEDDING_API_URL", "https://openrouter.ai/api/v1")
+_OPENAI_API_KEY = os.environ.get(
+    "MNEMOSYNE_EMBEDDING_API_KEY", os.environ.get("OPENAI_API_KEY", "")
+)
+_OPENAI_BASE_URL = os.environ.get(
+    "MNEMOSYNE_EMBEDDING_API_URL", "https://openrouter.ai/api/v1"
+)
 
 # --- Model selection ---
 # Normalize a blank (empty or whitespace-only) env var to the default. Such
@@ -78,7 +85,9 @@ _OPENAI_BASE_URL = os.environ.get("MNEMOSYNE_EMBEDDING_API_URL", "https://openro
 # empty-string, which is unknown and would raise at import under the fail-loud
 # rule even though the user set nothing meaningful. Uses .strip() to mirror the
 # blank handling for MNEMOSYNE_EMBEDDING_DIM in _get_embedding_dim.
-_DEFAULT_MODEL = (os.environ.get("MNEMOSYNE_EMBEDDING_MODEL") or "").strip() or "BAAI/bge-small-en-v1.5"
+_DEFAULT_MODEL = (
+    os.environ.get("MNEMOSYNE_EMBEDDING_MODEL") or ""
+).strip() or "BAAI/bge-small-en-v1.5"
 _embedding_model = None
 _API_CALL_COUNT = 0
 
@@ -91,16 +100,21 @@ def _get_prefix(kind: str) -> str:
     """Model prompt prefixes (e.g. E5 'query: '/'passage: ', EmbeddingGemma retrieval
     prompts). Applied VERBATIM — no trimming, no separator magic — because trailing
     whitespace is part of the trained prompt for several models."""
-    var = ("MNEMOSYNE_EMBEDDING_QUERY_PREFIX" if kind == "query"
-           else "MNEMOSYNE_EMBEDDING_DOC_PREFIX")
+    var = (
+        "MNEMOSYNE_EMBEDDING_QUERY_PREFIX"
+        if kind == "query"
+        else "MNEMOSYNE_EMBEDDING_DOC_PREFIX"
+    )
     prefix = os.environ.get(var, "")
     global _PREFIXES_LOGGED
     if prefix and not _PREFIXES_LOGGED:
         import logging
+
         logging.getLogger(__name__).info(
             "embedding prefixes active: query=%r doc=%r",
             os.environ.get("MNEMOSYNE_EMBEDDING_QUERY_PREFIX", ""),
-            os.environ.get("MNEMOSYNE_EMBEDDING_DOC_PREFIX", ""))
+            os.environ.get("MNEMOSYNE_EMBEDDING_DOC_PREFIX", ""),
+        )
         _PREFIXES_LOGGED = True
     return prefix
 
@@ -123,7 +137,11 @@ def _is_disabled() -> bool:
 
 def _is_api_model(model_name: str) -> bool:
     """Check if the model should use the OpenAI-compatible API."""
-    if model_name.startswith("openai/") or "text-embedding" in model_name or model_name.startswith("text-embedding"):
+    if (
+        model_name.startswith("openai/")
+        or "text-embedding" in model_name
+        or model_name.startswith("text-embedding")
+    ):
         return True
     # Custom endpoint: if MNEMOSYNE_EMBEDDING_API_URL is set to a non-OpenRouter URL,
     # assume the user has their own API server and any model name should route there.
@@ -138,7 +156,12 @@ def _is_api_model(model_name: str) -> bool:
     # users that also have OPENROUTER_API_KEY set for chat. Requiring an explicit
     # env flag keeps local-first behavior the default while giving a clean opt-in
     # for OpenRouter-hosted embedding models.
-    if os.environ.get("MNEMOSYNE_EMBEDDINGS_VIA_API", "").strip().lower() in ("1", "true", "yes", "on"):
+    if os.environ.get("MNEMOSYNE_EMBEDDINGS_VIA_API", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
         return True
     return False
 
@@ -172,8 +195,8 @@ def _get_embedding_dim(model_name: str) -> int:
         "sentence-transformers/all-MiniLM-L6-v2": 384,
         "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": 768,
         # --- Multilingual BGE ---
-        "BAAI/bge-m3": 1024,            # M3: multilingual (100+ langs), 1024-dim
-        "bge-m3": 1024,                 # Common remote/API alias
+        "BAAI/bge-m3": 1024,  # M3: multilingual (100+ langs), 1024-dim
+        "bge-m3": 1024,  # Common remote/API alias
         "BAAI/bge-multilingual-gemma2": 3584,
         # --- OpenAI ---
         "openai/text-embedding-3-small": 1536,
@@ -279,7 +302,8 @@ def _get_model():
                 last_err = exc
                 if _is_rate_limit_error(exc):
                     import time
-                    time.sleep(min(2 ** attempt, 8))
+
+                    time.sleep(min(2**attempt, 8))
                     continue
                 break
         # Re-raise the final error so the caller sees a clear failure
@@ -351,26 +375,53 @@ class _CredentialedNoRedirect(urllib.request.HTTPRedirectHandler):
         )
 
 
-_EMBED_MAX_CHARS = int(os.environ.get("MNEMOSYNE_EMBEDDING_MAX_CHARS", "6000"))
+def _embedding_max_chars() -> int:
+    """Resolve the optional per-input character cap at call time (default:
+    disabled). Set MNEMOSYNE_EMBEDDING_MAX_CHARS for local OpenAI-compatible
+    servers (llama.cpp et al.) whose per-slot context window rejects long
+    inputs with HTTP 400, aborting the whole batch; 0 or negative disables."""
+    raw = os.environ.get("MNEMOSYNE_EMBEDDING_MAX_CHARS", "").strip()
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "invalid MNEMOSYNE_EMBEDDING_MAX_CHARS=%r; embedding cap disabled",
+            raw,
+        )
+        return 0
 
 
 def _cap_for_api(texts: List[str]) -> List[str]:
-    """Cap each text before the API call: local OpenAI-compatible servers
-    (llama.cpp et al.) reject inputs above their per-slot context window
-    with HTTP 400, and one oversized row aborts the whole embedding batch
-    during reindex. Head-truncation keeps retrieval signal; the env var
-    disables/raises the cap."""
-    limit = _EMBED_MAX_CHARS
+    """Cap each text before the API call when MNEMOSYNE_EMBEDDING_MAX_CHARS
+    is set. Off by default: characters are not a token budget, and silent
+    head-truncation can drop retrieval content on endpoints that accept the
+    full text. When enabled, every truncation is logged."""
+    limit = _embedding_max_chars()
     if limit <= 0:
         return texts
-    return [t[:limit] if len(t) > limit else t for t in texts]
+    capped: List[str] = []
+    for text in texts:
+        if len(text) > limit:
+            logger.warning(
+                "embedding input truncated: %d -> %d chars (model=%s, cap=MNEMOSYNE_EMBEDDING_MAX_CHARS)",
+                len(text),
+                limit,
+                _DEFAULT_MODEL,
+            )
+            text = text[:limit]
+        capped.append(text)
+    return capped
 
 
 def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
     """Embed texts via OpenAI-compatible API (OpenRouter or custom endpoint)."""
     global _API_CALL_COUNT
     # Require API key for OpenRouter; custom endpoints may not need one.
-    base_url = os.environ.get("MNEMOSYNE_EMBEDDING_API_URL", "https://openrouter.ai/api/v1")
+    base_url = os.environ.get(
+        "MNEMOSYNE_EMBEDDING_API_URL", "https://openrouter.ai/api/v1"
+    )
     is_custom = "openrouter.ai" not in base_url
     if not is_custom and not _OPENAI_API_KEY:
         return None
@@ -386,10 +437,12 @@ def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
         )
 
     url = f"{base_url.rstrip('/')}/embeddings"
-    payload = json.dumps({
-        "model": _DEFAULT_MODEL,
-        "input": _cap_for_api(texts),
-    }).encode()
+    payload = json.dumps(
+        {
+            "model": _DEFAULT_MODEL,
+            "input": _cap_for_api(texts),
+        }
+    ).encode()
 
     headers = {
         "Content-Type": "application/json",
@@ -400,7 +453,7 @@ def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
         headers["Authorization"] = f"Bearer {_OPENAI_API_KEY}"
 
     def retry_delay(attempt: int) -> float:
-        return 0.5 * (2 ** attempt) + random.uniform(0, 0.5)
+        return 0.5 * (2**attempt) + random.uniform(0, 0.5)
 
     for attempt in range(3):
         try:
@@ -408,7 +461,9 @@ def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
             ctx = ssl.create_default_context()
             # Support custom CA bundles (NixOS, enterprise proxies, etc.)
             # SSL_CERT_FILE takes priority, then REQUESTS_CA_BUNDLE.
-            cert_file = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE")
+            cert_file = os.environ.get("SSL_CERT_FILE") or os.environ.get(
+                "REQUESTS_CA_BUNDLE"
+            )
             if cert_file:
                 ctx.load_verify_locations(cert_file)
             if _OPENAI_API_KEY:
@@ -461,8 +516,12 @@ def _embed_api(texts: List[str]) -> Optional[np.ndarray]:
             # Preserve compatibility with mocked/custom transports that expose
             # rate-limit failures only through their message text.
             message = str(exc).lower()
-            if ("429" in message or "too many requests" in message
-                    or "rate limit" in message or "rate-limit" in message):
+            if (
+                "429" in message
+                or "too many requests" in message
+                or "rate limit" in message
+                or "rate-limit" in message
+            ):
                 if attempt < 2:
                     time.sleep(retry_delay(attempt))
                     continue
