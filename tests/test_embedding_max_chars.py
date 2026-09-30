@@ -133,6 +133,13 @@ def test_query_cache_follows_cap_changes(monkeypatch):
     A query embedded uncapped must not be served from that cache once a cap is set."""
     monkeypatch.setenv("MNEMOSYNE_EMBEDDING_API_URL", "http://127.0.0.1:11435/v1")
     monkeypatch.delenv("MNEMOSYNE_EMBEDDING_QUERY_PREFIX", raising=False)
+    # CI runs with embeddings opted out; embed_query honors that before its cache.
+    for flag in (
+        "MNEMOSYNE_NO_EMBEDDINGS",
+        "MNEMOSYNE_SKIP_EMBEDDINGS",
+        "MNEMOSYNE_EMBEDDINGS_OFF",
+    ):
+        monkeypatch.delenv(flag, raising=False)
     payloads = _capture_payload(monkeypatch)
     embeddings._embed_query_cached.cache_clear()
 
