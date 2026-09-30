@@ -560,11 +560,13 @@ def embed_query(text: str) -> Optional[np.ndarray]:
     """Encode a single query text into a dense vector."""
     if not text:
         return None
-    return _embed_query_cached(_get_prefix("query") + text)
+    # The effective cap is part of the key: _embed_api reads MNEMOSYNE_EMBEDDING_MAX_CHARS at call time, so a
+    # vector embedded under one cap must not be served after the cap changes (review #1052).
+    return _embed_query_cached(_get_prefix("query") + text, _embedding_max_chars())
 
 
 @lru_cache(maxsize=512)
-def _embed_query_cached(prefixed: str) -> Optional[np.ndarray]:
+def _embed_query_cached(prefixed: str, _cap: int = 0) -> Optional[np.ndarray]:
     if _is_api_model(_DEFAULT_MODEL):
         result = _embed_api([prefixed])
         return result[0] if result is not None else None

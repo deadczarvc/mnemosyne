@@ -35,12 +35,19 @@ def _clean_env(monkeypatch):
 
 
 def _capture_payload(monkeypatch):
+    """Record each request payload; answer one distinguishable vector per input, in order."""
     payloads = []
-    response = Response({"data": [{"embedding": [0.0]}]})
 
     def fake_urlopen(request, *_args, **_kwargs):
-        payloads.append(json.loads(request.data.decode()))
-        return response
+        payload = json.loads(request.data.decode())
+        payloads.append(payload)
+        return Response(
+            {
+                "data": [
+                    {"embedding": [float(i + 1)]} for i in range(len(payload["input"]))
+                ]
+            }
+        )
 
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", fake_urlopen)
     return payloads
@@ -117,3 +124,21 @@ def test_oversized_row_does_not_abort_batch_when_capped(monkeypatch):
     assert len(payloads[0]["input"]) == 2
     assert len(payloads[0]["input"][0]) <= 100
     assert payloads[0]["input"][1] == "normal text"
+    # one vector per input, in input order
+    assert [float(v[0]) for v in vectors] == [1.0, 2.0]
+
+
+def test_query_cache_follows_cap_changes(monkeypatch):
+    """Review #1052: embed_query is cached by its prefixed text, while the cap is read at call time.
+    A query embedded uncapped must not be served from that cache once a cap is set."""
+    monkeypatch.setenv("MNEMOSYNE_EMBEDDING_API_URL", "http://127.0.0.1:11435/v1")
+    monkeypatch.delenv("MNEMOSYNE_EMBEDDING_QUERY_PREFIX", raising=False)
+    payloads = _capture_payload(monkeypatch)
+    embeddings._embed_query_cached.cache_clear()
+
+    embeddings.embed_query("abcdef")
+    monkeypatch.setenv("MNEMOSYNE_EMBEDDING_MAX_CHARS", "3")
+    embeddings.embed_query("abcdef")
+
+    assert [p["input"] for p in payloads] == [["abcdef"], ["abc"]]
+    embeddings._embed_query_cached.cache_clear()
